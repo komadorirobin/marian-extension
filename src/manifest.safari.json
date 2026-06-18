@@ -1,0 +1,14 @@
+{
+	"background": {
+		"service_worker": "background.js"
+	},
+	"action": {
+		"default_title": "Get Book Details",
+		"default_popup": "popup.html"
+	},
+	"permissions": [
+		"tabs",
+		"storage",
+		"scripting"
+	]
+}

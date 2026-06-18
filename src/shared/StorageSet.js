@@ -13,7 +13,10 @@ export class StorageBackedSet {
 
     // Detect environment: Firefox uses 'browser', Chrome uses 'chrome'.
     const api = typeof browser !== 'undefined' ? browser : chrome;
-    this.storage = api.storage[this.areaName];
+    this.storage = api.storage[this.areaName] || api.storage.local;
+    if (!api.storage[this.areaName]) {
+      this.areaName = 'local';
+    }
 
     // Local in-memory cache
     this._cache = new Set();
@@ -119,4 +122,3 @@ export class StorageBackedSet {
     return Array.from(this._cache);
   }
 }
-

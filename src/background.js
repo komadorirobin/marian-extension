@@ -43,6 +43,9 @@ function openSidebar(tab) {
   } else if (chrome.sidebarAction && chrome.sidebarAction.open) {
     // Firefox Sidebar API
     chrome.sidebarAction.open();
+  } else if (chrome.action && chrome.action.openPopup) {
+    // Safari uses the action popup instead of a native extension sidebar.
+    chrome.action.openPopup();
   } else {
     console.warn("No native sidebar API available.");
   }
@@ -99,6 +102,13 @@ function hasActiveSidebar(windowId) {
 }
 
 function showUnsupportedNotification(tab) {
+  if (!chrome.notifications || !chrome.notifications.create) {
+    chrome.action?.setBadgeText?.({ tabId: tab?.id, text: "!" });
+    chrome.action?.setBadgeBackgroundColor?.({ color: "#c0392b" });
+    setTimeout(() => chrome.action?.setBadgeText?.({ tabId: tab?.id, text: "" }), 3000);
+    return;
+  }
+
   try {
     chrome.notifications.create(
       // use a unique id so repeated clicks update the same notification

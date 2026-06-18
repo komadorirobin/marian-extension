@@ -8,15 +8,42 @@ import { setLastFetchedUrl, getCurrentTab, notifyBackground, rememberWindowId, i
 
 const DEBUG = false;
 
+function hasNativeSidebar() {
+  return typeof chrome.sidePanel !== "undefined" || typeof chrome.sidebarAction !== "undefined";
+}
+
+async function fetchAndRenderCurrentTab() {
+  showStatus("Loading details...");
+  let tab = await getCurrentTab();
+  try {
+    const details = await tryGetDetails(tab);
+    showDetails();
+    const detailsEl = document.getElementById('details');
+    if (detailsEl) detailsEl.innerHTML = "";
+    await renderDetails(details);
+
+    setLastFetchedUrl(tab?.url || "");
+    getCurrentTab().then((activeTab) => {
+      updateRefreshButtonForUrl(activeTab?.url || "");
+    });
+  } catch (err) {
+    console.log("err", err);
+    showStatus(err);
+    notifyBackground("REFRESH_ICON", { tab });
+  };
+}
+
 document.addEventListener("DOMContentLoaded", () => {
-  notifyBackground("SIDEBAR_READY");
-  window.addEventListener("pagehide", () => notifyBackground("SIDEBAR_UNLOADED"));
+  if (hasNativeSidebar()) {
+    notifyBackground("SIDEBAR_READY");
+    window.addEventListener("pagehide", () => notifyBackground("SIDEBAR_UNLOADED"));
+  }
 
   chrome.windows.getCurrent(rememberWindowId);
 
   if (DEBUG) initSidebarLogger(); // DEBUG: Initialize sidebar logger
 
-  getCurrentTab().then((tab) => {
+  getCurrentTab().then(async (tab) => {
     const url = tab?.url || "";
 
     showStatus("DOM Loaded, fetching details...");
@@ -27,6 +54,10 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!isAllowedUrl(url)) {
       showStatus("This extension only works on supported product pages.");
       return;
+    }
+
+    if (!hasNativeSidebar()) {
+      await fetchAndRenderCurrentTab();
     }
   });
 });
@@ -40,27 +71,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "REFRESH_SIDEBAR" && isForThisSidebar(msg.windowId) && msg.url && isAllowedUrl(msg.url)) {
-    (async () => {
-      showStatus("Loading details...");
-      let tab = await getCurrentTab();
-      try {
-        const details = await tryGetDetails(tab);
-        showDetails();
-        const detailsEl = document.getElementById('details');
-        if (detailsEl) detailsEl.innerHTML = "";
-        await renderDetails(details);
-
-        setLastFetchedUrl(tab?.url || "");
-        getCurrentTab().then((activeTab) => {
-          updateRefreshButtonForUrl(activeTab?.url || "");
-        });
-
-      } catch (err) {
-        console.log("err", err);
-        showStatus(err);
-        notifyBackground("REFRESH_ICON", { tab });
-      };
-    })();
+    fetchAndRenderCurrentTab();
   }
 
   if (msg.type === "TAB_URL_CHANGED" && isForThisSidebar(msg.windowId)) {

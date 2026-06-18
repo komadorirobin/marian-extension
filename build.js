@@ -6,6 +6,17 @@ const pkg = JSON.parse(fs.readFileSync("./package.json", "utf-8"));
 
 const SRC_DIR = "src";
 const DIST_DIR = "distro";
+const DEFAULT_TARGETS = ["chrome", "firefox", "safari"];
+
+function getBuildTargets() {
+  const rawTargets = process.env.BUILD_TARGETS;
+  if (!rawTargets) return DEFAULT_TARGETS;
+
+  return rawTargets
+    .split(",")
+    .map((target) => target.trim())
+    .filter(Boolean);
+}
 
 function copyDir(src, dest) {
   for (const item of fs.readdirSync(src)) {
@@ -39,13 +50,15 @@ function copyManifests(target) {
   fs.writeFileSync(path.join(destDir, "manifest.json"), JSON.stringify(combinedManifest, null, 2))
 }
 
-async function buildScripts(outDir) {
+async function buildScripts(outDir, target) {
+  const scriptTarget = target === "safari" ? ["safari15"] : ["chrome109"];
+
   await esbuild.build({
     entryPoints: [path.join(SRC_DIR, "*.js")],
     bundle: true,
     outdir: outDir,
     format: "iife",
-    target: ["chrome109"],
+    target: scriptTarget,
     logLevel: "info",
     treeShaking: false,
   });
@@ -63,7 +76,7 @@ async function buildScripts(outDir) {
     bundle: true,
     format: "iife",
     platform: "browser",
-    target: ["chrome109"],
+    target: scriptTarget,
     logLevel: "info",
     treeShaking: false,
   });
@@ -75,15 +88,16 @@ async function build(target) {
   copyManifests(target);
 
   // Bundle js specifically for this target
-  await buildScripts(destDir);
+  await buildScripts(destDir, target);
 
   console.log(`Built ${target} extension to ${destDir}`);
 }
 
 async function main() {
   try {
-    await build("chrome");
-    await build("firefox");
+    for (const target of getBuildTargets()) {
+      await build(target);
+    }
   } catch (err) {
     console.error(err);
     process.exit(1);

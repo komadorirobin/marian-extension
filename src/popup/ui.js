@@ -38,23 +38,45 @@ function copyToClipboard(text, labelEl) {
   });
 }
 
-function downloadImage(url, bookId) {
+async function downloadImage(url, bookId) {
   const safeId = String(bookId || '').replace(/[^a-z0-9]/gi, '');
   const filename = `${safeId}_cover.jpg`;
 
-  chrome.downloads.download({
-    url: url,
-    filename: filename,
-    saveAs: false,
-    conflictAction: 'uniquify'
-  }, (downloadId) => {
-    if (chrome.runtime.lastError) {
-      console.error('Image download failed:', chrome.runtime.lastError);
-      showStatus(`Download failed: ${chrome.runtime.lastError.message}`);
-    } else {
-      console.log('Image download started, ID:', downloadId);
-    }
-  });
+  if (chrome.downloads && chrome.downloads.download) {
+    chrome.downloads.download({
+      url: url,
+      filename: filename,
+      saveAs: false,
+      conflictAction: 'uniquify'
+    }, (downloadId) => {
+      if (chrome.runtime.lastError) {
+        console.error('Image download failed:', chrome.runtime.lastError);
+        showStatus(`Download failed: ${chrome.runtime.lastError.message}`);
+      } else {
+        console.log('Image download started, ID:', downloadId);
+      }
+    });
+    return;
+  }
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+    const objectUrl = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = filename;
+    link.rel = 'noopener';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  } catch (error) {
+    console.error('Image download fallback failed:', error);
+    chrome.tabs.create({ url });
+    showStatus("Opened the cover image in a new tab. Use Safari's share menu to save it.");
+  }
 }
 
 
