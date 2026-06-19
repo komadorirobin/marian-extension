@@ -1,6 +1,10 @@
 import { tryGetDetails } from "./messaging.js";
 import { isAllowedUrl, normalizeUrl } from "../extractors";
-import { setLastFetchedUrl, getLastFetchedUrl, getCurrentTab, SetupSettings, getLocalDateFormat, orderedKeys, normalizeDetails, notifyBackground } from "./utils.js";
+import {
+  setLastFetchedUrl, getLastFetchedUrl, getCurrentTab, SetupSettings,
+  getLocalDateFormat, orderedKeys, normalizeDetails, notifyBackground,
+  saveLastDetails
+} from "./utils.js";
 
 const settingsManager = SetupSettings(document.querySelector("#settings"), {
   hyphenateIsbn: {
@@ -434,6 +438,7 @@ export function addRefreshButton() {
 async function getDetailsForTab(tab) {
   try {
     const details = await tryGetDetails(tab)
+    await saveLastDetails(details, tab?.url || "");
     showDetails();
     await renderDetails(details);
 
@@ -459,11 +464,12 @@ async function getDetailsForTab(tab) {
   }
 }
 
-export function updateRefreshButtonForUrl(url) {
+export function updateRefreshButtonForUrl(url, options = {}) {
   const btn = document.getElementById('refresh-button');
   const statusEl = statusBox();
   if (!btn) return;
 
+  const hasCachedDetails = options.hasCachedDetails === true;
   const allowed = isAllowedUrl(url);
   const norm = normalizeUrl(url);
   const alreadyFetched = norm === getLastFetchedUrl();
@@ -479,8 +485,8 @@ export function updateRefreshButtonForUrl(url) {
   btn.classList.remove('refresh-enabled', 'refresh-disabled', 'refresh-unsupported');
 
   if (!allowed) {
-    btn.classList.add('refresh-unsupported');
-    btn.textContent = 'This page is not supported';
+    btn.classList.add(hasCachedDetails ? 'refresh-disabled' : 'refresh-unsupported');
+    btn.textContent = hasCachedDetails ? 'Showing checked-out details' : 'This page is not supported';
   } else if (alreadyFetched) {
     btn.classList.add('refresh-disabled');
     btn.textContent = 'You have these details checked out';
@@ -489,7 +495,7 @@ export function updateRefreshButtonForUrl(url) {
     btn.textContent = 'Check out details from current tab';
   }
 
-  if (statusEl && allowed) statusEl.style.display = 'none';
+  if (statusEl && (allowed || hasCachedDetails)) statusEl.style.display = 'none';
 }
 
 export function checkActiveTabAndUpdateButton() {

@@ -4,7 +4,10 @@ import {
   showStatus, showDetails, renderDetails, initSidebarLogger,
   addRefreshButton, updateRefreshButtonForUrl
 } from "./ui.js";
-import { setLastFetchedUrl, getCurrentTab, notifyBackground, rememberWindowId, isForThisSidebar } from "./utils.js";
+import {
+  setLastFetchedUrl, getCurrentTab, notifyBackground, rememberWindowId,
+  isForThisSidebar, saveLastDetails, getLastDetails
+} from "./utils.js";
 
 const DEBUG = false;
 
@@ -12,17 +15,23 @@ function hasNativeSidebar() {
   return typeof chrome.sidePanel !== "undefined" || typeof chrome.sidebarAction !== "undefined";
 }
 
+async function renderDetailsForUrl(details, url) {
+  showDetails();
+  const detailsEl = document.getElementById('details');
+  if (detailsEl) detailsEl.innerHTML = "";
+  await renderDetails(details);
+
+  setLastFetchedUrl(url || "");
+}
+
 async function fetchAndRenderCurrentTab() {
   showStatus("Loading details...");
   let tab = await getCurrentTab();
   try {
     const details = await tryGetDetails(tab);
-    showDetails();
-    const detailsEl = document.getElementById('details');
-    if (detailsEl) detailsEl.innerHTML = "";
-    await renderDetails(details);
+    await saveLastDetails(details, tab?.url || "");
+    await renderDetailsForUrl(details, tab?.url || "");
 
-    setLastFetchedUrl(tab?.url || "");
     getCurrentTab().then((activeTab) => {
       updateRefreshButtonForUrl(activeTab?.url || "");
     });
@@ -31,6 +40,17 @@ async function fetchAndRenderCurrentTab() {
     showStatus(err);
     notifyBackground("REFRESH_ICON", { tab });
   };
+}
+
+async function renderCachedDetailsForUnsupportedPage(url) {
+  const cached = await getLastDetails();
+  if (!cached) {
+    showStatus("This extension only works on supported product pages.");
+    return;
+  }
+
+  await renderDetailsForUrl(cached.details, cached.url);
+  updateRefreshButtonForUrl(url, { hasCachedDetails: true });
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -52,7 +72,7 @@ document.addEventListener("DOMContentLoaded", () => {
     updateRefreshButtonForUrl(url);
 
     if (!isAllowedUrl(url)) {
-      showStatus("This extension only works on supported product pages.");
+      await renderCachedDetailsForUnsupportedPage(url);
       return;
     }
 
