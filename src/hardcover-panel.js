@@ -1,5 +1,5 @@
 import { getLastDetails, LAST_DETAILS_KEY } from "./shared/lastDetails.js";
-import { getLibrisDetailsByIsbn } from "./extractors/libris.js";
+import { getLibrisDetailsWithPhysicalByIsbn } from "./extractors/libris.js";
 import { getAdlibrisDetailsFromHtml } from "./extractors/adlibris.js";
 import { cleanText, fetchBackground } from "./shared/utils.js";
 
@@ -577,28 +577,44 @@ function ensureAutoLookup(context) {
 }
 
 async function lookupAutomaticSources(context) {
-  const results = await Promise.all([
-    lookupLibrisSource(context),
+  const groups = await Promise.all([
+    lookupLibrisSources(context),
     lookupAdlibrisSource(context),
   ]);
 
-  return results.filter(Boolean);
+  return groups.flat().filter(Boolean);
 }
 
-async function lookupLibrisSource(context) {
+async function lookupLibrisSources(context) {
   try {
-    const details = await getLibrisDetailsByIsbn(context.isbn);
-    return {
+    const { details, physicalDetails, physicalRecordUrl, physicalError } = await getLibrisDetailsWithPhysicalByIsbn(context.isbn);
+    const sources = [{
       name: "Libris",
       url: firstMapping(details, "Libris URI") || `https://libris.kb.se/find?q=isbn:${encodeURIComponent(context.isbn)}`,
       details,
-    };
+    }];
+
+    if (physicalDetails) {
+      sources.push({
+        name: "Libris physical edition",
+        url: physicalRecordUrl || firstMapping(physicalDetails, "Libris URI"),
+        details: physicalDetails,
+      });
+    } else if (physicalError) {
+      sources.push({
+        name: "Libris physical edition",
+        url: firstMapping(details, "Libris URI") || `https://libris.kb.se/find?q=isbn:${encodeURIComponent(context.isbn)}`,
+        error: physicalError,
+      });
+    }
+
+    return sources;
   } catch {
-    return {
+    return [{
       name: "Libris",
       url: `https://libris.kb.se/find?q=isbn:${encodeURIComponent(context.isbn)}`,
       error: "No exact Libris record found.",
-    };
+    }];
   }
 }
 

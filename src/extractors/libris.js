@@ -91,31 +91,30 @@ class librisScraper extends Extractor {
 }
 
 async function getLibrisDetails(url) {
-  const recordUrl = normalizeLibrisRecordUrl(url);
-  if (!recordUrl) throw new Error("Invalid Libris record URL");
-
-  const data = await fetchLibrisJson(recordUrl);
-  const topLevelGraph = asArray(data?.["@graph"]);
-  const graph = collectGraphNodes(data);
-
-  const record = topLevelGraph.find(isRecordWithMainEntity)
-    || graph.find(isRecordWithMainEntity);
-  if (!record) throw new Error("No Libris record found");
-
-  const entity = findNode(graph, record.mainEntity?.["@id"])
-    || graph.find((node) => hasId(node) && resourceKey(node["@id"]) === resourceKey(record["@id"]) && !isType(node, "Record"));
-  if (!entity) throw new Error("No Libris record entity found");
-
-  const details = extractDetails(record, entity, graph);
-  const coverData = getCoverData(getImageUrls(entity));
-
-  return collectObject([coverData, details]);
+  const { record, entity, graph } = await getLibrisRecordContext(url);
+  return getDetailsFromContext(record, entity, graph);
 }
 
 async function getLibrisDetailsByIsbn(isbn) {
   const recordUrl = await findLibrisRecordUrlByIsbn(isbn);
   if (!recordUrl) throw new Error("No Libris record found for ISBN");
   return getLibrisDetails(recordUrl);
+}
+
+async function getLibrisDetailsWithPhysicalByIsbn(isbn) {
+  const recordUrl = await findLibrisRecordUrlByIsbn(isbn);
+  if (!recordUrl) throw new Error("No Libris record found for ISBN");
+
+  const context = await getLibrisRecordContext(recordUrl);
+  const details = await getDetailsFromContext(context.record, context.entity, context.graph);
+  const physical = await getRelatedPhysicalDetails(context);
+
+  return {
+    details,
+    physicalDetails: physical?.details || null,
+    physicalRecordUrl: physical?.recordUrl || "",
+    physicalError: physical ? "" : getPhysicalLookupError(context.entity, context.graph),
+  };
 }
 
 async function findLibrisRecordUrlByIsbn(isbn) {
@@ -197,6 +196,114 @@ function getRecordUrlFromFindItem(item) {
   const candidate = candidates.find(Boolean);
   if (!candidate) return "";
   return String(candidate).replace(/#.*$/, "");
+}
+
+async function getLibrisRecordContext(url) {
+  const recordUrl = normalizeLibrisRecordUrl(url);
+  if (!recordUrl) throw new Error("Invalid Libris record URL");
+
+  const data = await fetchLibrisJson(recordUrl);
+  const topLevelGraph = asArray(data?.["@graph"]);
+  const graph = collectGraphNodes(data);
+
+  const record = topLevelGraph.find(isRecordWithMainEntity)
+    || graph.find(isRecordWithMainEntity);
+  if (!record) throw new Error("No Libris record found");
+
+  const entity = findNode(graph, record.mainEntity?.["@id"])
+    || graph.find((node) => hasId(node) && resourceKey(node["@id"]) === resourceKey(record["@id"]) && !isType(node, "Record"));
+  if (!entity) throw new Error("No Libris record entity found");
+
+  return { record, entity, graph };
+}
+
+async function getDetailsFromContext(record, entity, graph) {
+  const details = extractDetails(record, entity, graph);
+  const coverData = getCoverData(getImageUrls(entity));
+
+  return collectObject([coverData, details]);
+}
+
+async function getRelatedPhysicalDetails({ entity, graph }) {
+  const physicalEntity = findRelatedPhysicalEntity(entity, graph);
+  if (!physicalEntity) return null;
+
+  const record = findRecordForEntity(graph, physicalEntity) || {
+    "@id": recordUrlFromEntity(physicalEntity),
+    mainEntity: { "@id": physicalEntity["@id"] },
+  };
+
+  const details = await getDetailsFromContext(record, physicalEntity, graph);
+  return { details, recordUrl: recordUrlFromEntity(physicalEntity) };
+}
+
+function findRelatedPhysicalEntity(entity, graph) {
+  const workKey = resourceKey(entity?.instanceOf?.["@id"]);
+  if (!workKey) return null;
+
+  const currentKey = resourceKey(entity?.["@id"]);
+  const candidates = graph
+    .filter((node) => {
+      if (!hasId(node) || isType(node, "Record")) return false;
+      if (resourceKey(node["@id"]) === currentKey) return false;
+      if (resourceKey(node.instanceOf?.["@id"]) !== workKey) return false;
+      if (!getPages(node)) return false;
+      return isPhysicalEntity(node);
+    })
+    .sort((a, b) => physicalCandidateScore(b) - physicalCandidateScore(a));
+
+  return candidates[0] || null;
+}
+
+function findRecordForEntity(graph, entity) {
+  const entityKey = resourceKey(entity?.["@id"]);
+  return graph.find((node) => isRecordWithMainEntity(node) && resourceKey(node.mainEntity?.["@id"]) === entityKey) || null;
+}
+
+function recordUrlFromEntity(entity) {
+  return String(entity?.["@id"] || "").replace(/#.*$/, "");
+}
+
+function isPhysicalEntity(entity) {
+  const format = getEditionFormat(entity);
+  return !!format && normalizeReadingFormat(format) === "Physical Book" && !isDigitalEntity(entity) && !isAudioEntity(entity);
+}
+
+function isDigitalEntity(entity) {
+  const haystack = getEntityFormatHaystack(entity);
+  return /(digitalresource|onlineresource|online resource|ebook|e-book|electronic|digital)/i.test(haystack);
+}
+
+function isAudioEntity(entity) {
+  const haystack = getEntityFormatHaystack(entity);
+  return /(audio|audiobook|sound|spoken|cd|mp3|daisy|ljudbok)/i.test(haystack);
+}
+
+function physicalCandidateScore(entity) {
+  const haystack = getEntityFormatHaystack(entity);
+  let score = 0;
+
+  if (/(hardcover|hardback|inbunden|halvklotband|klotband|kartonnage)/i.test(haystack)) score += 50;
+  if (/(physicalresource|volume|print)/i.test(haystack)) score += 40;
+  if (/(paperback|softcover|h\u00e4ftad|mjukband)/i.test(haystack)) score += 30;
+  if (getPages(entity)) score += 20;
+  if (asArray(entity.identifiedBy).some((item) => getTypes(item).includes("ISBN"))) score += 10;
+
+  return score;
+}
+
+function getPhysicalLookupError(entity, graph) {
+  if (!isDigitalEntity(entity)) return "";
+
+  const workKey = resourceKey(entity?.instanceOf?.["@id"]);
+  const hasPhysicalCandidate = graph.some((node) => {
+    if (!hasId(node) || isType(node, "Record")) return false;
+    return resourceKey(node.instanceOf?.["@id"]) === workKey && isPhysicalEntity(node);
+  });
+
+  return hasPhysicalCandidate
+    ? "No related physical Libris edition with page count found."
+    : "No related physical Libris edition found.";
 }
 
 function extractDetails(record, entity, graph) {
@@ -370,13 +477,7 @@ function getListeningLength(entity) {
 }
 
 function getEditionFormat(entity) {
-  const haystack = [
-    ...getTypes(entity),
-    ...asArray(entity.category).map((item) => item?.["@id"] || firstLabel(item)),
-    ...asArray(entity.identifiedBy).flatMap((item) => asArray(item?.qualifier).map(firstLabel)),
-    firstLabel(entity.editionStatement),
-    getExtentText(entity),
-  ].join(" ").toLowerCase();
+  const haystack = getEntityFormatHaystack(entity);
 
   if (/(audio|audiobook|sound|spoken|cd|mp3|daisy|ljudbok)/i.test(haystack)) return "Audiobook";
   if (/(digitalresource|onlineresource|online resource|ebook|e-book|electronic|digital)/i.test(haystack)) return "Digital";
@@ -385,6 +486,16 @@ function getEditionFormat(entity) {
   if (/(physicalresource|volume|print)/i.test(haystack)) return "Print";
 
   return "";
+}
+
+function getEntityFormatHaystack(entity) {
+  return [
+    ...getTypes(entity),
+    ...asArray(entity.category).map((item) => item?.["@id"] || firstLabel(item)),
+    ...asArray(entity.identifiedBy).flatMap((item) => asArray(item?.qualifier).map(firstLabel)),
+    firstLabel(entity.editionStatement),
+    getExtentText(entity),
+  ].join(" ").toLowerCase();
 }
 
 function getLanguage(entity, graph) {
@@ -577,4 +688,10 @@ function collectPlainObject(object) {
   );
 }
 
-export { librisScraper, getLibrisDetails, getLibrisDetailsByIsbn, findLibrisRecordUrlByIsbn };
+export {
+  librisScraper,
+  getLibrisDetails,
+  getLibrisDetailsByIsbn,
+  getLibrisDetailsWithPhysicalByIsbn,
+  findLibrisRecordUrlByIsbn,
+};
