@@ -4,6 +4,7 @@ import {
   addMapping,
   cleanText,
   collectObject,
+  fetchBackground,
   getCoverData,
   normalizeReadingFormat,
 } from "../shared/utils.js";
@@ -111,6 +112,25 @@ async function getLibrisDetails(url) {
   return collectObject([coverData, details]);
 }
 
+async function getLibrisDetailsByIsbn(isbn) {
+  const recordUrl = await findLibrisRecordUrlByIsbn(isbn);
+  if (!recordUrl) throw new Error("No Libris record found for ISBN");
+  return getLibrisDetails(recordUrl);
+}
+
+async function findLibrisRecordUrlByIsbn(isbn) {
+  const cleanIsbn = String(isbn || "").replace(/[^0-9X]/gi, "");
+  if (!cleanIsbn) return "";
+
+  const searchUrl = `https://libris.kb.se/find?q=isbn:${encodeURIComponent(cleanIsbn)}&_limit=20`;
+  const data = await fetchLibrisJson(searchUrl);
+  const items = asArray(data?.items);
+
+  const exact = items.find((item) => itemMatchesIsbn(item, cleanIsbn));
+  const item = exact || items[0];
+  return getRecordUrlFromFindItem(item);
+}
+
 function normalizeLibrisRecordUrl(url) {
   try {
     const parsed = new URL(url);
@@ -132,11 +152,15 @@ function normalizeLibrisRecordUrl(url) {
 }
 
 async function fetchLibrisJson(recordUrl) {
-  const response = await fetch(recordUrl, {
-    headers: {
-      Accept: "application/ld+json, application/json;q=0.9",
-    },
-  });
+  const headers = { Accept: "application/ld+json, application/json;q=0.9" };
+
+  let response;
+  try {
+    response = await fetch(recordUrl, { headers });
+  } catch {
+    const text = await fetchBackground(recordUrl, { headers });
+    return JSON.parse(text);
+  }
 
   if (!response.ok) {
     throw new Error(`Libris API error: ${response.status}`);
@@ -147,6 +171,32 @@ async function fetchLibrisJson(recordUrl) {
   } catch (error) {
     throw new Error(`Libris response was not JSON-LD: ${error.message}`);
   }
+}
+
+function itemMatchesIsbn(item, isbn) {
+  const identifiers = [
+    ...asArray(item?.identifiedBy),
+    ...asArray(item?.itemOf?.identifiedBy),
+    ...asArray(item?.itemOf?.indirectlyIdentifiedBy),
+  ];
+
+  return identifiers.some((identifier) => {
+    const value = String(identifier?.value || "").replace(/[^0-9X]/gi, "");
+    return value === isbn;
+  });
+}
+
+function getRecordUrlFromFindItem(item) {
+  const candidates = [
+    item?.itemOf?.meta?.["@id"],
+    item?.itemOf?.["@id"],
+    item?.meta?.["@id"],
+    item?.["@id"],
+  ];
+
+  const candidate = candidates.find(Boolean);
+  if (!candidate) return "";
+  return String(candidate).replace(/#.*$/, "");
 }
 
 function extractDetails(record, entity, graph) {
@@ -527,4 +577,4 @@ function collectPlainObject(object) {
   );
 }
 
-export { librisScraper, getLibrisDetails };
+export { librisScraper, getLibrisDetails, getLibrisDetailsByIsbn, findLibrisRecordUrlByIsbn };

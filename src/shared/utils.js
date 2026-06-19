@@ -434,10 +434,11 @@ export async function fetchHTML(url, args = undefined) {
 /**
  * Performs an HTTP request via the background script to bypass CSP restrictions.
  * @param {string} url URL to fetch
+ * @param {{headers?: Record<string, string>, credentials?: RequestCredentials}} [args]
  * @returns {Promise<string>} response text
  */
-export async function fetchBackground(url) {
-  const response = await runtime.sendMessage({ action: 'fetchUrl', url });
+export async function fetchBackground(url, args = {}) {
+  const response = await runtime.sendMessage({ action: 'fetchUrl', url, ...args });
   if (response && response.status === 'success') {
     return response.data;
   }

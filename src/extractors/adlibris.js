@@ -58,11 +58,7 @@ class adlibrisScraper extends Extractor {
   ];
 
   async getDetails() {
-    const details = extractDetails(document);
-    return collectObject([
-      getCoverData(getCoverUrls(document, details.Title)),
-      details,
-    ]);
+    return getAdlibrisDetailsFromDocument(document, document.location.href);
   }
 
   normalizeUrl(url) {
@@ -78,14 +74,14 @@ class adlibrisScraper extends Extractor {
   }
 }
 
-function extractDetails(doc) {
+function extractDetails(doc, sourceUrl = doc.location?.href || "") {
   const lines = getLines(doc);
   const productInfo = getProductInfo(lines);
   const jsonLd = getBookJsonLd(doc);
   const details = {};
   const mappings = {};
 
-  const isbn = cleanIsbn(firstValue(productInfo.ISBN) || jsonLd?.isbn || getIsbnFromUrl(doc.location?.href || ""));
+  const isbn = cleanIsbn(firstValue(productInfo.ISBN) || jsonLd?.isbn || getIsbnFromUrl(sourceUrl));
   if (isbn.length === 13) details["ISBN-13"] = isbn;
   if (isbn.length === 10) details["ISBN-10"] = isbn;
   if (isbn) addMapping(mappings, "Adlibris", isbn);
@@ -133,6 +129,23 @@ function extractDetails(doc) {
   if (Object.keys(mappings).length) details.Mappings = mappings;
 
   return details;
+}
+
+async function getAdlibrisDetailsFromDocument(doc, sourceUrl = doc.location?.href || "") {
+  const details = extractDetails(doc, sourceUrl);
+  return collectObject([
+    getCoverData(getCoverUrls(doc, details.Title)),
+    details,
+  ]);
+}
+
+async function getAdlibrisDetailsFromHtml(html, sourceUrl) {
+  if (html.includes("Vercel Security Checkpoint") || html.includes("x-vercel-challenge-token")) {
+    throw new Error("Adlibris blocked automated fetch");
+  }
+
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return getAdlibrisDetailsFromDocument(doc, sourceUrl);
 }
 
 function getTitle(doc, jsonLd) {
@@ -361,4 +374,4 @@ function asArray(value) {
   return Array.isArray(value) ? value : [value];
 }
 
-export { adlibrisScraper, extractDetails };
+export { adlibrisScraper, extractDetails, getAdlibrisDetailsFromHtml };

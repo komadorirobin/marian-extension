@@ -1,4 +1,7 @@
 import { getLastDetails, LAST_DETAILS_KEY } from "./shared/lastDetails.js";
+import { getLibrisDetailsByIsbn } from "./extractors/libris.js";
+import { getAdlibrisDetailsFromHtml } from "./extractors/adlibris.js";
+import { cleanText, fetchBackground } from "./shared/utils.js";
 
 const PANEL_ID = "marian-hardcover-panel";
 const STYLE_ID = "marian-hardcover-panel-style";
@@ -14,6 +17,7 @@ const rows = [
   ["Listening Length", "Listening Length"],
   ["Listening Length Seconds", "Total Seconds"],
   ["Pages", "Pages"],
+  ["Weight", "Weight"],
   ["Edition Format", "Edition Format"],
   ["Edition Information", "Edition Information"],
   ["Publication date", "Publication date"],
@@ -23,6 +27,8 @@ const rows = [
 
 let closed = false;
 let currentUrl = location.href;
+let autoLookupState = { key: "", context: null, loading: false, results: [] };
+let autoLookupRun = 0;
 
 function isHardcoverEditPage() {
   return location.hostname === "hardcover.app" && /\/editions\/[^/]+\/edit\/?$/.test(location.pathname);
@@ -175,6 +181,63 @@ function ensureStyles() {
       font-size: 12px;
     }
 
+    #${PANEL_ID} .marian-sources {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(148, 163, 184, 0.24);
+    }
+
+    #${PANEL_ID} .marian-section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 0 0 8px;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    #${PANEL_ID} .marian-source {
+      padding: 10px 0;
+      border-top: 1px solid rgba(148, 163, 184, 0.16);
+    }
+
+    #${PANEL_ID} .marian-source:first-of-type {
+      border-top: 0;
+      padding-top: 0;
+    }
+
+    #${PANEL_ID} .marian-source-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    #${PANEL_ID} .marian-source-name {
+      color: #fff;
+      font-weight: 700;
+    }
+
+    #${PANEL_ID} .marian-source-link {
+      color: #93c5fd;
+      font-size: 12px;
+      text-decoration: none;
+    }
+
+    #${PANEL_ID} .marian-source-link:hover {
+      text-decoration: underline;
+    }
+
+    #${PANEL_ID} .marian-source-error {
+      color: #fbbf24;
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
     @media (max-width: 760px) {
       #${PANEL_ID} {
         top: 82px;
@@ -269,6 +332,16 @@ function renderRows(details, container) {
   });
 }
 
+function createSourceLink(url, text = "Open") {
+  const link = document.createElement("a");
+  link.className = "marian-source-link";
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = text;
+  return link;
+}
+
 function label(text) {
   const span = document.createElement("span");
   span.className = "marian-label";
@@ -276,20 +349,30 @@ function label(text) {
   return span;
 }
 
-function renderDetails(panel, details) {
+function renderDetails(panel, details, autoLookup) {
   const body = panel.querySelector(".marian-body");
   body.innerHTML = "";
 
   if (!details || Object.keys(details).length === 0) {
+    const hasAutoResults = (autoLookup?.results || []).some((source) => source.details);
     const empty = document.createElement("div");
     empty.className = "marian-empty";
-    empty.textContent = "No checked-out details yet.";
+    empty.textContent = hasAutoResults
+      ? "Automatic sources found."
+      : autoLookup?.loading
+        ? "Looking up sources..."
+        : "No checked-out details yet.";
     body.appendChild(empty);
 
     const muted = document.createElement("div");
     muted.className = "marian-muted";
-    muted.textContent = "Open a supported product page with Marian first.";
+    muted.textContent = hasAutoResults
+      ? "Copy values from the source sections below."
+      : autoLookup?.context?.isbn
+      ? `Automatic lookup for ISBN ${autoLookup.context.isbn}.`
+      : "Open a supported product page with Marian first.";
     body.appendChild(muted);
+    renderAutoSources(autoLookup, body);
     return;
   }
 
@@ -332,6 +415,80 @@ function renderDetails(panel, details) {
   body.appendChild(top);
 
   renderRows(details, body);
+  renderAutoSources(autoLookup, body);
+}
+
+function renderAutoSources(autoLookup, body) {
+  if (!autoLookup?.context?.isbn) return;
+
+  const section = document.createElement("div");
+  section.className = "marian-sources";
+
+  const title = document.createElement("div");
+  title.className = "marian-section-title";
+  title.appendChild(document.createTextNode("Automatic sources"));
+  title.appendChild(createCopySpan(autoLookup.context.isbn));
+  section.appendChild(title);
+
+  if (autoLookup.loading) {
+    const muted = document.createElement("div");
+    muted.className = "marian-muted";
+    muted.textContent = "Checking Libris and Adlibris...";
+    section.appendChild(muted);
+  }
+
+  for (const source of autoLookup.results || []) {
+    const sourceEl = document.createElement("div");
+    sourceEl.className = "marian-source";
+
+    const head = document.createElement("div");
+    head.className = "marian-source-head";
+
+    const name = document.createElement("span");
+    name.className = "marian-source-name";
+    name.textContent = source.name;
+    head.appendChild(name);
+
+    if (source.url) head.appendChild(createSourceLink(source.url));
+    sourceEl.appendChild(head);
+
+    if (source.details && Object.keys(source.details).length > 0) {
+      if (source.details.Title) {
+        const row = document.createElement("div");
+        row.className = "marian-row";
+        row.appendChild(label("Title"));
+        row.appendChild(createCopySpan(valueText(source.details.Title)));
+        sourceEl.appendChild(row);
+      }
+
+      if (source.details.Description) {
+        const description = document.createElement("div");
+        description.className = "marian-description";
+        description.appendChild(createCopySpan(valueText(source.details.Description)));
+        sourceEl.appendChild(description);
+      }
+
+      renderRows(source.details, sourceEl);
+    }
+
+    if (source.error) {
+      const error = document.createElement("div");
+      error.className = "marian-source-error";
+      error.textContent = source.error;
+      sourceEl.appendChild(error);
+    }
+
+    section.appendChild(sourceEl);
+  }
+
+  if (!autoLookup.loading && !(autoLookup.results || []).length) {
+    const muted = document.createElement("div");
+    muted.className = "marian-muted";
+    muted.textContent = "No automatic sources found.";
+    section.appendChild(muted);
+  }
+
+  body.appendChild(section);
 }
 
 function ensurePanel() {
@@ -382,16 +539,164 @@ async function renderPanel() {
   }
 
   const panel = ensurePanel();
+  const autoLookup = ensureAutoLookup(getHardcoverContext());
   const cached = await getLastDetails();
-  renderDetails(panel, cached?.details);
+  renderDetails(panel, cached?.details, autoLookup);
+}
+
+function ensureAutoLookup(context) {
+  const key = context?.isbn ? `${context.isbn}|${context.title || ""}` : "";
+  if (!key) {
+    autoLookupState = { key: "", context, loading: false, results: [] };
+    return autoLookupState;
+  }
+
+  if (autoLookupState.key === key) return autoLookupState;
+
+  const runId = ++autoLookupRun;
+  autoLookupState = { key, context, loading: true, results: [] };
+
+  lookupAutomaticSources(context).then((results) => {
+    if (runId !== autoLookupRun) return;
+    autoLookupState = { key, context, loading: false, results };
+    renderPanel();
+  }).catch((error) => {
+    if (runId !== autoLookupRun) return;
+    autoLookupState = {
+      key,
+      context,
+      loading: false,
+      results: [{ name: "Automatic lookup", error: error.message || String(error) }],
+    };
+    renderPanel();
+  });
+
+  return autoLookupState;
+}
+
+async function lookupAutomaticSources(context) {
+  const results = await Promise.all([
+    lookupLibrisSource(context),
+    lookupAdlibrisSource(context),
+  ]);
+
+  return results.filter(Boolean);
+}
+
+async function lookupLibrisSource(context) {
+  try {
+    const details = await getLibrisDetailsByIsbn(context.isbn);
+    return {
+      name: "Libris",
+      url: firstMapping(details, "Libris URI") || `https://libris.kb.se/find?q=isbn:${encodeURIComponent(context.isbn)}`,
+      details,
+    };
+  } catch {
+    return {
+      name: "Libris",
+      url: `https://libris.kb.se/find?q=isbn:${encodeURIComponent(context.isbn)}`,
+      error: "No exact Libris record found.",
+    };
+  }
+}
+
+async function lookupAdlibrisSource(context) {
+  const url = buildAdlibrisProductUrl(context);
+  const searchUrl = buildAdlibrisSearchUrl(context);
+  if (!url && !searchUrl) return null;
+
+  try {
+    const html = await fetchBackground(url, {
+      credentials: "include",
+      headers: { Accept: "text/html,application/xhtml+xml" },
+    });
+    const details = await getAdlibrisDetailsFromHtml(html, url);
+
+    if (!details?.Title || details.Title === "Vercel Security Checkpoint") {
+      throw new Error("Adlibris blocked automated fetch");
+    }
+
+    return { name: "Adlibris", url, details };
+  } catch {
+    return {
+      name: "Adlibris",
+      url: searchUrl || url,
+      error: "Open the source link if Adlibris asks Safari to verify the browser first.",
+    };
+  }
+}
+
+function firstMapping(details, source) {
+  const values = details?.Mappings?.[source];
+  return Array.isArray(values) ? values[0] : values;
+}
+
+function buildAdlibrisProductUrl(context) {
+  if (!context?.isbn) return "";
+  const slug = slugify(context.title || "bok");
+  if (!slug) return "";
+  return `https://www.adlibris.com/sv/bok/${slug}-${context.isbn}`;
+}
+
+function buildAdlibrisSearchUrl(context) {
+  if (!context?.isbn) return "";
+  return `https://www.adlibris.com/sv/sok?q=${encodeURIComponent(context.isbn)}`;
+}
+
+function getHardcoverContext() {
+  const isbns = getPageIsbns();
+  const isbn = isbns.find((value) => value.length === 13) || isbns[0] || "";
+  const title = getHardcoverTitle();
+  return { isbn, title, isbns };
+}
+
+function getPageIsbns() {
+  const texts = [document.body?.innerText || ""];
+  document.querySelectorAll("input, textarea").forEach((input) => {
+    if (input.value) texts.push(input.value);
+  });
+
+  const matches = texts.join("\n").match(/(?:97[89][-\s]?)?(?:\d[-\s]?){8,16}[\dX]/gi) || [];
+  const isbns = matches
+    .map((value) => value.replace(/[^0-9X]/gi, ""))
+    .filter((value) => value.length === 10 || value.length === 13);
+
+  return [...new Set(isbns)];
+}
+
+function getHardcoverTitle() {
+  const field = Array.from(document.querySelectorAll("input, textarea")).find((input) => {
+    const name = `${input.name || ""} ${input.id || ""} ${input.getAttribute("aria-label") || ""}`.toLowerCase();
+    return name.includes("title") && cleanText(input.value);
+  });
+
+  return cleanText(field?.value || document.querySelector("h1")?.textContent || "");
+}
+
+function slugify(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/&/g, " och ")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 function watchUrlChanges() {
   setInterval(() => {
-    if (location.href === currentUrl) return;
-    currentUrl = location.href;
-    closed = false;
-    renderPanel();
+    if (location.href !== currentUrl) {
+      currentUrl = location.href;
+      closed = false;
+      autoLookupRun += 1;
+      autoLookupState = { key: "", context: null, loading: false, results: [] };
+      renderPanel();
+      return;
+    }
+
+    const context = getHardcoverContext();
+    const key = context?.isbn ? `${context.isbn}|${context.title || ""}` : "";
+    if (key && key !== autoLookupState.key) renderPanel();
   }, 1000);
 }
 

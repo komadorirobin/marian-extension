@@ -211,7 +211,7 @@ runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'fetchUrl') {
-    handleFetchRequest(request.url).then(sendResponse);
+    handleFetchRequest(request.url, request).then(sendResponse);
     return true;
   }
   return false;
@@ -221,10 +221,18 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
   await activeSidebarWindows.delete(windowId);
 });
 
-async function handleFetchRequest(url) {
+async function handleFetchRequest(url, request = {}) {
   // console.log("got request", url);
   try {
-    const response = await fetch(url);
+    const options = {};
+    if (request.headers && typeof request.headers === "object") {
+      options.headers = request.headers;
+    }
+    if (request.credentials) {
+      options.credentials = request.credentials;
+    }
+
+    const response = await fetch(url, options);
     // console.log("fetched", response);
 
     if (!response.ok) {
@@ -239,7 +247,10 @@ async function handleFetchRequest(url) {
 
     return {
       status: 'success',
-      data: text
+      data: text,
+      statusCode: response.status,
+      contentType: response.headers.get("content-type") || "",
+      responseUrl: response.url || url,
     };
   } catch (error) {
     return {
