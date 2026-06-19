@@ -539,9 +539,11 @@ async function renderPanel() {
   }
 
   const panel = ensurePanel();
-  const autoLookup = ensureAutoLookup(getHardcoverContext());
+  const context = getHardcoverContext();
+  const autoLookup = ensureAutoLookup(context);
   const cached = await getLastDetails();
-  renderDetails(panel, cached?.details, autoLookup);
+  const details = detailsMatchContext(cached?.details, context) ? cached?.details : null;
+  renderDetails(panel, details, autoLookup);
 }
 
 function ensureAutoLookup(context) {
@@ -664,6 +666,76 @@ function getPageIsbns() {
   return [...new Set(isbns)];
 }
 
+function detailsMatchContext(details, context) {
+  if (!details || !context) return false;
+
+  const contextIsbns = expandIsbns(context.isbns?.length ? context.isbns : [context.isbn]);
+  const detailIsbns = expandIsbns(getDetailsIsbns(details));
+
+  if (contextIsbns.length && detailIsbns.length) {
+    return detailIsbns.some((isbn) => contextIsbns.includes(isbn));
+  }
+
+  const contextTitle = normalizeComparableTitle(context.title);
+  const detailTitle = normalizeComparableTitle(details.Title);
+  if (contextTitle && detailTitle) {
+    return contextTitle === detailTitle || contextTitle.includes(detailTitle) || detailTitle.includes(contextTitle);
+  }
+
+  return !contextIsbns.length;
+}
+
+function getDetailsIsbns(details) {
+  const values = [
+    details?.["ISBN-13"],
+    details?.["ISBN-10"],
+  ];
+
+  for (const ids of Object.values(details?.Mappings || {})) {
+    values.push(...(Array.isArray(ids) ? ids : [ids]));
+  }
+
+  return values;
+}
+
+function expandIsbns(values) {
+  const result = [];
+
+  for (const value of values || []) {
+    const isbn = cleanIsbn(value);
+    if (!isbn) continue;
+
+    result.push(isbn);
+    if (isbn.length === 10) {
+      const isbn13 = isbn13From10(isbn);
+      if (isbn13) result.push(isbn13);
+    }
+  }
+
+  return [...new Set(result)];
+}
+
+function cleanIsbn(value) {
+  const isbn = String(value || "").replace(/[^0-9X]/gi, "");
+  return isbn.length === 10 || isbn.length === 13 ? isbn : "";
+}
+
+function isbn13From10(isbn) {
+  if (!/^\d{9}[\dX]$/i.test(isbn)) return "";
+
+  const body = `978${isbn.slice(0, 9)}`;
+  const checksum = (10 - ([...body].reduce((sum, digit, index) => sum + Number(digit) * (index % 2 ? 3 : 1), 0) % 10)) % 10;
+  return `${body}${checksum}`;
+}
+
+function normalizeComparableTitle(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
 function getHardcoverTitle() {
   const field = Array.from(document.querySelectorAll("input, textarea")).find((input) => {
     const name = `${input.name || ""} ${input.id || ""} ${input.getAttribute("aria-label") || ""}`.toLowerCase();
@@ -705,6 +777,12 @@ function init() {
   watchUrlChanges();
 
   const api = typeof browser !== "undefined" ? browser : chrome;
+  api?.runtime?.onMessage?.addListener((msg, sender, sendResponse) => {
+    if (msg?.type !== "GET_HARDCOVER_CONTEXT") return false;
+    sendResponse(getHardcoverContext());
+    return false;
+  });
+
   api?.storage?.onChanged?.addListener((changes) => {
     if (LAST_DETAILS_KEY in changes) renderPanel();
   });

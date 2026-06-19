@@ -308,12 +308,21 @@ export function addMapping(mappings, name, ids) {
 /**
  * Normalize arbitrary text by stripping invisible characters and squeezing whitespace.
  *
- * @param {string | null | undefined} text Raw text content to sanitize.
+ * @param {string | number | boolean | object | null | undefined} text Raw text content to sanitize.
  * @returns {string} Sanitized text with normalized spacing.
  */
 export function cleanText(text) {
-  if (!text || text == null) return '';
-  return text
+  if (text == null || text === '') return '';
+
+  if (Array.isArray(text)) {
+    text = text.map(cleanText).filter(Boolean).join(", ");
+  } else if (typeof text === "object") {
+    return cleanText(text.value ?? text.text ?? text.name ?? text.label ?? "");
+  }
+
+  if (text == null || text === '') return '';
+
+  return String(text)
     .normalize('NFKC')                                        // Normalize Unicode to one style
     .replace(/\p{Cf}/gu, '')                                  // Remove Unicode control chars
     .replace(/[\u200E\u200F\u202A-\u202E\u00A0\uFEFF‎‏]/g, ' ') // Normalize invisible formatting chars (NBSP, BOM, Bidi marks) to spaces (should not be needed but keeping for consistency)
