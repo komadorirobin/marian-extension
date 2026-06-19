@@ -15,6 +15,37 @@ function hasNativeSidebar() {
   return typeof chrome.sidePanel !== "undefined" || typeof chrome.sidebarAction !== "undefined";
 }
 
+function isHardcoverEditUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === "hardcover.app" && /\/editions\/[^/]+\/edit\/?$/.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function queryTabs(query) {
+  return new Promise((resolve) => {
+    try {
+      const maybePromise = chrome.tabs.query(query, (tabs) => {
+        resolve(tabs || []);
+      });
+      if (maybePromise && typeof maybePromise.then === "function") {
+        maybePromise.then(resolve).catch(() => resolve([]));
+      }
+    } catch {
+      resolve([]);
+    }
+  });
+}
+
+async function findSupportedSiblingTab(currentTab) {
+  const tabs = await queryTabs({ currentWindow: true });
+  return tabs
+    .filter((tab) => tab?.id !== currentTab?.id && tab?.url && isAllowedUrl(tab.url))
+    .sort((a, b) => (b.lastAccessed || 0) - (a.lastAccessed || 0))[0];
+}
+
 async function renderDetailsForUrl(details, url) {
   showDetails();
   const detailsEl = document.getElementById('details');
@@ -42,15 +73,35 @@ async function fetchAndRenderCurrentTab() {
   };
 }
 
-async function renderCachedDetailsForUnsupportedPage(url) {
+async function renderCachedDetailsForUnsupportedPage(url, tab) {
   const cached = await getLastDetails();
-  if (!cached) {
+  if (cached) {
+    await renderDetailsForUrl(cached.details, cached.url);
+    updateRefreshButtonForUrl(url, { hasCachedDetails: true });
+    return;
+  }
+
+  if (!isHardcoverEditUrl(url)) {
     showStatus("This extension only works on supported product pages.");
     return;
   }
 
-  await renderDetailsForUrl(cached.details, cached.url);
-  updateRefreshButtonForUrl(url, { hasCachedDetails: true });
+  const sourceTab = await findSupportedSiblingTab(tab);
+  if (!sourceTab) {
+    showStatus("No checked-out details yet. Open a supported product page with Marian first.");
+    return;
+  }
+
+  try {
+    showStatus("Loading details from another supported tab...");
+    const details = await tryGetDetails(sourceTab);
+    await saveLastDetails(details, sourceTab.url || "");
+    await renderDetailsForUrl(details, sourceTab.url || "");
+    updateRefreshButtonForUrl(url, { hasCachedDetails: true });
+  } catch (err) {
+    console.log("fallback tab fetch failed", err);
+    showStatus(err);
+  }
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -72,7 +123,7 @@ document.addEventListener("DOMContentLoaded", () => {
     updateRefreshButtonForUrl(url);
 
     if (!isAllowedUrl(url)) {
-      await renderCachedDetailsForUnsupportedPage(url);
+      await renderCachedDetailsForUnsupportedPage(url, tab);
       return;
     }
 

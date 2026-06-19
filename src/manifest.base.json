@@ -9,6 +9,8 @@
 	},
 	"homepage_url": "https://hardcover.app/join?referrer_id=8753",
 	"host_permissions": [
+		"https://hardcover.app/*",
+
 		"https://www.amazon.com/*",
 		"https://www.amazon.co.uk/*",
 		"https://www.amazon.com.au/*",
@@ -158,6 +160,17 @@
 		"https://openlibrary.org/*",
 		"https://www.penguinrandomhouse.com/books/*",
 		"https://www.smashwords.com/books/*"
+	],
+	"content_scripts": [
+		{
+			"matches": [
+				"https://hardcover.app/*"
+			],
+			"js": [
+				"hardcover-panel.js"
+			],
+			"run_at": "document_idle"
+		}
 	],
 	"icons": {
 		"16": "icons/icon.png",
