@@ -2,6 +2,7 @@
 import { Extractor } from "./AbstractExtractor";
 
 import { abeBooksScraper } from "./abebooks";
+import { adlibrisScraper } from "./adlibris";
 import { amazonScraper } from "./amazon";
 import { anilistScraper } from "./anilist";
 import { animePlanetScraper } from "./animeplanet";
@@ -45,6 +46,7 @@ import { worldCatScraper } from "./worldcat";
 /** @type{Extractor[]} */
 const extractors = [
   new abeBooksScraper(),
+  new adlibrisScraper(),
   new amazonScraper(),
   new anilistScraper(),
   new animePlanetScraper(),
