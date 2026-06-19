@@ -8,6 +8,17 @@
       height: 100%;
     }
 
+    html.safari-popup,
+    html.safari-popup body {
+      width: 360px;
+      min-width: 360px;
+      max-width: 360px;
+      height: 560px;
+      min-height: 420px;
+      max-height: 560px;
+      overflow: hidden;
+    }
+
     body {
       height: 100vh;
       /* not min-height */
@@ -127,6 +138,7 @@
       flex: 1 1 auto;
       overflow: auto;
       padding: 12px;
+      min-height: 140px;
     }
 
     #refresh-button {
@@ -340,6 +352,14 @@
       padding: 20px;
     }
 
+    html.safari-popup .settings-inner {
+      padding: 12px 14px 14px;
+    }
+
+    html.safari-popup #hardcover-callout {
+      display: none;
+    }
+
     .setting-item {
       margin-bottom: 5px;
     }
@@ -472,7 +492,6 @@
           <!-- settings get inserted here -->
         </div>
       </div>
-    </div>
     </div>
 
     <div id="hardcover-callout">

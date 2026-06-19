@@ -50,6 +50,14 @@ function copyManifests(target) {
   fs.writeFileSync(path.join(destDir, "manifest.json"), JSON.stringify(combinedManifest, null, 2))
 }
 
+function applyTargetHtmlTweaks(target) {
+  if (target !== "safari") return;
+
+  const popupPath = path.join(DIST_DIR, target, "popup.html");
+  const html = fs.readFileSync(popupPath, "utf-8");
+  fs.writeFileSync(popupPath, html.replace("<html>", '<html class="safari-popup">'));
+}
+
 async function buildScripts(outDir, target) {
   const scriptTarget = target === "safari" ? ["safari15"] : ["chrome109"];
 
@@ -86,6 +94,7 @@ async function build(target) {
   const destDir = path.join(DIST_DIR, target);
   copyDir(SRC_DIR, destDir);
   copyManifests(target);
+  applyTargetHtmlTweaks(target);
 
   // Bundle js specifically for this target
   await buildScripts(destDir, target);
